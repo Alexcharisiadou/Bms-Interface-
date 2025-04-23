@@ -1,11 +1,10 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
+import tkinter.font as tkfont
 import threading
-import time
-import random
 import serial
 import serial.tools.list_ports
-from time import sleep
+import queue
 
 class BMSApp:
     def __init__(self, root):
@@ -14,184 +13,225 @@ class BMSApp:
         self.root.geometry("1200x700")
         self.root.configure(bg="#2E3B4E")
 
-        self.style = ttk.Style()
-        self.style.theme_use("clam")
-        self.style.configure("TFrame", background="#2E3B4E")
-        self.style.configure("TLabel", background="#2E3B4E", foreground="white", font=("Arial", 14))
-        self.style.configure("TButton", background="#4CAF50", foreground="white", font=("Arial", 12, "bold"))
-        self.style.map("TButton", background=[("active", "#45A049")])
+        # ─── Fonts ─────────────────────────────────────
+        default_font = tkfont.nametofont("TkDefaultFont")
+        default_font.configure(size=16)
+        self.label_font = default_font
+        self.header_font = default_font.copy()
+        self.header_font.configure(size=20, weight="bold")
 
-        self.style.configure("Purple.TLabelframe", background="#e6ccff", borderwidth=2, relief="groove")
-        self.style.configure("Purple.TLabelframe.Label", background="#e6ccff", foreground="#4b0082",
-                             font=("Arial", 14, "bold"))
-        self.style.configure("Purple.TLabel", background="#e6ccff", foreground="black", font=("Arial", 11), padding=5)
-        self.style.configure("PurpleHeader.TLabel", background="#e6ccff", foreground="#4b0082",
-                             font=("Arial", 12, "bold"), padding=5)
+        # ─── Styles ────────────────────────────────────
+        style = ttk.Style()
+        style.theme_use("clam")
+        style.configure("TFrame", background="#2E3B4E")
+        style.configure("TButton", background="#4CAF50", foreground="white")
+        style.map("TButton", background=[("active", "#45A049")])
 
-        self.VoltageList = [[0.0 for _ in range(12)] for _ in range(12)]
-        self.TempsList = [[0 for _ in range(10)] for _ in range(12)]
-        self.canDapterIsConnected = False
+        style.configure("Purple.TLabelframe", background="#e6ccff",
+                        borderwidth=2, relief="groove")
+        style.configure("Purple.TLabelframe.Label",
+                        background="#e6ccff", foreground="#4b0082")
+        style.configure("Purple.TLabel", background="#e6ccff",
+                        foreground="black", padding=5)
+        style.configure("PurpleHeader.TLabel", background="#e6ccff",
+                        foreground="#4b0082", padding=5)
+
+        # ─── Data storage ──────────────────────────────
+        # -1 = invalid / no reading yet
+        self.VoltageList = [[-1.0]*12 for _ in range(12)]
+        self.TempsList   = [[-1]*10   for _ in range(12)]
+
+        # thread-safe queue for incoming serial lines
+        self.serial_queue = queue.Queue()
+
         self.ser = None
 
-        self.notebook = ttk.Notebook(self.root)
-        self.notebook.pack(expand=True, fill="both", padx=20, pady=20)
+        # ─── Notebook & tabs ──────────────────────────
+        nb = ttk.Notebook(self.root)
+        nb.pack(expand=True, fill="both", padx=20, pady=20)
 
-        self.tab1 = ttk.Frame(self.notebook)
-        self.notebook.add(self.tab1, text="Cell Details")
+        self.tab1 = ttk.Frame(nb); nb.add(self.tab1, text="Cell Details")
+        self.tab2 = ttk.Frame(nb); nb.add(self.tab2, text="Summary & Control")
 
-        self.tab2 = ttk.Frame(self.notebook)
-        self.notebook.add(self.tab2, text="Summary & Control")
+        self._create_tab1()
+        self._create_tab2()
 
-        self.create_tab1()
-        self.create_tab2()
+        # ─── Serial reader thread ──────────────────────
+        self.serial_thread = threading.Thread(
+            target=self._serial_reader_loop, daemon=True)
+        self.serial_thread.start()
 
-        self.update_thread = threading.Thread(target=self.update_values, daemon=True)
-        self.update_thread.start()
+        # ─── Start periodic GUI update ────────────────
+        self.root.after(500, self._process_serial_queue)
+        self.root.after(1000, self._update_gui)
 
-    def create_tab1(self):
-        self.temp_frame = ttk.LabelFrame(self.tab1, text="Temperatures", style="Purple.TLabelframe", padding=10)
-        self.temp_frame.pack(side=tk.TOP, fill="both", expand=True, padx=10, pady=10)
+    def _create_tab1(self):
+        # Temperatures grid
+        tf = ttk.LabelFrame(self.tab1, text="Temperatures",
+                            style="Purple.TLabelframe", padding=10)
+        tf.pack(side=tk.TOP, fill="both", expand=True, padx=10, pady=10)
 
-        self.tab1_temps = [[None for _ in range(10)] for _ in range(12)]
+        self.tab1_temps = []
+        # headers
         for col in range(10):
-            header = ttk.Label(self.temp_frame, text=f"Cell {col + 1}", style="PurpleHeader.TLabel")
-            header.grid(row=0, column=col, padx=5, pady=5)
+            hdr = ttk.Label(tf, text=f"Cell {col+1}",
+                            style="PurpleHeader.TLabel", font=self.header_font)
+            hdr.grid(row=0, column=col, padx=5, pady=5)
+        # value labels
         for row in range(12):
+            row_lbls = []
             for col in range(10):
-                lbl = ttk.Label(self.temp_frame, text="-- °C", style="Purple.TLabel")
-                lbl.grid(row=row + 1, column=col, padx=5, pady=5)
-                self.tab1_temps[row][col] = lbl
+                lbl = ttk.Label(tf, text="-1 °C",
+                                style="Purple.TLabel", font=self.label_font)
+                lbl.grid(row=row+1, column=col, padx=5, pady=5)
+                row_lbls.append(lbl)
+            self.tab1_temps.append(row_lbls)
 
-        self.volt_frame = ttk.LabelFrame(self.tab1, text="Voltages", style="Purple.TLabelframe", padding=10)
-        self.volt_frame.pack(side=tk.TOP, fill="both", expand=True, padx=10, pady=10)
+        # Voltages grid
+        vf = ttk.LabelFrame(self.tab1, text="Voltages",
+                            style="Purple.TLabelframe", padding=10)
+        vf.pack(side=tk.TOP, fill="both", expand=True, padx=10, pady=10)
 
-        self.tab1_voltages = [[None for _ in range(12)] for _ in range(12)]
+        self.tab1_voltages = []
         for col in range(12):
-            header = ttk.Label(self.volt_frame, text=f"Cell {col + 1}", style="PurpleHeader.TLabel")
-            header.grid(row=0, column=col, padx=5, pady=5)
+            hdr = ttk.Label(vf, text=f"Cell {col+1}",
+                            style="PurpleHeader.TLabel", font=self.header_font)
+            hdr.grid(row=0, column=col, padx=5, pady=5)
         for row in range(12):
+            row_lbls = []
             for col in range(12):
-                lbl = ttk.Label(self.volt_frame, text="-- V", style="Purple.TLabel")
-                lbl.grid(row=row + 1, column=col, padx=5, pady=5)
-                self.tab1_voltages[row][col] = lbl
+                lbl = ttk.Label(vf, text="-1 V",
+                                style="Purple.TLabel", font=self.label_font)
+                lbl.grid(row=row+1, column=col, padx=5, pady=5)
+                row_lbls.append(lbl)
+            self.tab1_voltages.append(row_lbls)
 
-    def create_tab2(self):
-        self.tree_frame = ttk.Frame(self.tab2)
-        self.tree_frame.pack(side=tk.TOP, fill="both", expand=True, padx=10, pady=10)
+    def _create_tab2(self):
+        # Treeview
+        tf = ttk.Frame(self.tab2)
+        tf.pack(side=tk.TOP, fill="both", expand=True, padx=10, pady=10)
 
-        self.tree_voltages = ttk.Treeview(self.tree_frame,
-                                          columns=("Segment", *[str(i) for i in range(1, 13)]),
-                                          show="headings")
-        for col in self.tree_voltages["columns"]:
-            self.tree_voltages.heading(col, text=col)
-            self.tree_voltages.column(col, width=80, anchor="center")
-        self.tree_voltages.pack(expand=True, fill="both", pady=10)
+        cols = ["Segment"] + [str(i) for i in range(1,13)]
+        self.tree = ttk.Treeview(tf, columns=cols, show="headings")
+        for c in cols:
+            self.tree.heading(c, text=c)
+            self.tree.column(c, width=80, anchor="center")
+        self.tree.pack(expand=True, fill="both", pady=10)
 
-        self.controls_frame = ttk.Frame(self.tab2)
-        self.controls_frame.pack(side=tk.TOP, pady=10)
+        # Controls
+        cf = ttk.Frame(self.tab2)
+        cf.pack(side=tk.TOP, pady=10)
 
-        self.charge_label = ttk.Label(self.controls_frame, text="Set Charging Current (A):")
-        self.charge_label.grid(row=0, column=0, padx=10, pady=5)
+        lbl = ttk.Label(cf, text="Set Charging Current (A):", font=self.label_font)
+        lbl.grid(row=0, column=0, padx=10, pady=5)
+        self.current_entry = ttk.Entry(cf, width=10, font=self.label_font)
+        self.current_entry.grid(row=0, column=1, padx=10, pady=5)
 
-        self.charging_current = ttk.Entry(self.controls_frame, width=10)
-        self.charging_current.grid(row=0, column=1, padx=10, pady=5)
+        self.charge_btn = ttk.Button(cf, text="Start Charge",
+                                     command=self._start_charge)
+        self.charge_btn.grid(row=0, column=2, padx=10, pady=5)
 
-        self.charge_button = ttk.Button(self.controls_frame, text="Start Charge", command=self.start_charge)
-        self.charge_button.grid(row=0, column=2, padx=10, pady=5)
-
+        # Port selection
         self.port_var = tk.StringVar()
-        available_ports = [port.device for port in serial.tools.list_ports.comports()]
-        self.port_dropdown = ttk.Combobox(self.controls_frame, textvariable=self.port_var, values=available_ports, state="readonly")
-        self.port_dropdown.grid(row=0, column=3, padx=10, pady=5)
+        ports = [p.device for p in serial.tools.list_ports.comports()]
+        if not ports: ports = ["<no ports>"]
+        self.port_cb = ttk.Combobox(cf, textvariable=self.port_var,
+                                    values=ports, state="readonly",
+                                    font=self.label_font)
+        self.port_cb.grid(row=0, column=3, padx=10, pady=5)
 
-        self.connect_button = ttk.Button(self.controls_frame, text="Connect to BMS", command=self.serialConnect)
-        self.connect_button.grid(row=0, column=4, padx=10, pady=5)
+        self.connect_btn = ttk.Button(cf, text="Connect to BMS",
+                                      command=self._connect_to_bms)
+        self.connect_btn.grid(row=0, column=4, padx=10, pady=5)
 
-        self.connect_status = ttk.Label(self.controls_frame, text="Status: Disconnected", foreground="#FF5733")
-        self.connect_status.grid(row=1, column=0, columnspan=5, pady=10)
+        self.status_lbl = ttk.Label(cf, text="Status: Disconnected",
+                                    foreground="#FF5733", font=self.label_font)
+        self.status_lbl.grid(row=1, column=0, columnspan=5, pady=10)
 
-    def serialConnect(self):
-        try:
-            selected_port = self.port_var.get()
-            if not selected_port:
-                messagebox.showwarning("Warning", "Please select a COM port.")
-                return
-            self.ser = serial.Serial(selected_port, 9600)
-            self.connect_status.config(text=f"Connected to {selected_port}", foreground="limegreen")
-            self.canDapterIsConnected = True
-            self.ser.write("S5\rL1\r".encode())
-            sleep(1)
-            self.ser.write("O\rL1\r".encode())
-        except Exception as e:
-            messagebox.showerror("Error", f"Could not connect to CanDapter! {e}")
-            self.canDapterIsConnected = False
-
-    def start_charge(self):
-        if not self.canDapterIsConnected:
-            messagebox.showerror("Error", "Connect to BMS first!")
+    def _connect_to_bms(self):
+        port = self.port_var.get()
+        if port == "<no ports>":
+            messagebox.showwarning("No Port", "No serial ports available!")
             return
         try:
-            charge_value = float(self.charging_current.get())
-            if charge_value < 0 or charge_value > 10:
-                raise ValueError("Invalid charge value")
-            strHex = hex(int(10 * charge_value) + 100).replace("0x", "")
-            canStr = "T1502" + strHex + "00"
-            self.ser.write(canStr.encode('ascii'))
-            self.ser.write(b'\rL1\r')
-            messagebox.showinfo("Charging", f"Charging started with {charge_value}A")
+            self.ser = serial.Serial(port, baudrate=115200, timeout=0.1)
+            # handshake
+            self.ser.write(b"HELLO\n")
+            self.status_lbl.config(text="Status: Connecting...", foreground="#FFA500")
+        except serial.SerialException as e:
+            messagebox.showerror("Serial Error", str(e))
+            return
+
+    def _start_charge(self):
+        if not self.ser or not self.ser.is_open:
+            messagebox.showwarning("Not Connected", "Please connect first.")
+            return
+        try:
+            c = float(self.current_entry.get())
+            cmd = f"C,{c:.2f}\n".encode()
+            self.ser.write(cmd)
         except ValueError:
-            messagebox.showerror("Error", "Please enter a valid charge current (0-10A)")
+            messagebox.showerror("Invalid", "Enter a numeric current.")
 
-    def update_values(self):
+    def _serial_reader_loop(self):
+        """Continuously read lines and enqueue them."""
         while True:
-            if self.canDapterIsConnected:
+            if self.ser and self.ser.in_waiting:
                 try:
-                    x = self.ser.read_until(b'\r').decode().replace('t', '')
-                    if len(x) < 12:
-                        continue
-                    if int(x[0:3], 16) == 1792:
-                        seg = int(x[4:6], 16) % 12
-                        cell = int(x[6:8], 16) - 4
-                        if 0 <= seg < 12 and 0 <= cell < 12:
-                            self.VoltageList[seg][cell] = int(x[8:12], 16) * 0.000150
-                    elif int(x[0:3], 16) == 1793:
-                        seg = int(x[4:6], 16)
-                        cell = int(x[6:8], 16)
-                        if 0 <= seg < 12 and 0 <= cell < 10:
-                            self.TempsList[seg][cell] = int(x[8:10], 16) - 100
+                    line = self.ser.readline().decode('ascii', errors='ignore').strip()
+                    if line:
+                        self.serial_queue.put(line)
+                except Exception:
+                    pass
 
-                    self.tree_voltages.delete(*self.tree_voltages.get_children())
-                    for i in range(12):
-                        self.tree_voltages.insert("", "end",
-                                                  values=(f"Segment {i + 1}",
-                                                          *[f"{self.VoltageList[i][j]:.3f}V" for j in range(12)]))
-                except Exception as e:
-                    self.canDapterIsConnected = False
-                    self.connect_status.config(text="CanDapter disconnected, reconnect:", foreground="red")
-            else:
-                for i in range(12):
-                    for j in range(12):
-                        self.VoltageList[i][j] = random.randint(300, 420) / 100.0
-                for i in range(12):
-                    for j in range(10):
-                        self.TempsList[i][j] = random.randint(15, 35)
-                self.tree_voltages.delete(*self.tree_voltages.get_children())
-                for i in range(12):
-                    self.tree_voltages.insert("", "end",
-                                              values=(f"Segment {i + 1}",
-                                                      *[f"{self.VoltageList[i][j]:.3f}V" for j in range(12)]))
+    def _process_serial_queue(self):
+        """Handle all queued serial lines."""
+        while not self.serial_queue.empty():
+            line = self.serial_queue.get_nowait()
+            # handshake ack?
+            if line == "HELLO_ACK":
+                self.status_lbl.config(text="Status: Connected", foreground="#4CAF50")
+                continue
+            # parse telemetry
+            parts = line.split(",")
+            if len(parts) == 4:
+                typ, seg_s, cell_s, val_s = parts
+                try:
+                    seg = int(seg_s)-1
+                    cell = int(cell_s)-1
+                    if typ == "V" and 0 <= seg < 12 and 0 <= cell < 12:
+                        self.VoltageList[seg][cell] = float(val_s)
+                    elif typ == "T" and 0 <= seg < 12 and 0 <= cell < 10:
+                        self.TempsList[seg][cell] = int(val_s)
+                except ValueError:
+                    pass
+        # reschedule
+        self.root.after(200, self._process_serial_queue)
 
-            for i in range(12):
-                for j in range(10):
-                    new_temp = f"{self.TempsList[i][j]} °C"
-                    fg_color = "red" if self.TempsList[i][j] > 30 else "black"
-                    self.tab1_temps[i][j].config(text=new_temp, foreground=fg_color)
-            for i in range(12):
-                for j in range(12):
-                    new_volt = f"{self.VoltageList[i][j]:.3f} V"
-                    self.tab1_voltages[i][j].config(text=new_volt)
+    def _update_gui(self):
+        """Refresh all labels and the treeview."""
+        # Tab1 grids
+        for seg in range(12):
+            for cell in range(12):
+                v = self.VoltageList[seg][cell]
+                txt = f"{v:.3f} V" if v >= 0 else "-1 V"
+                self.tab1_voltages[seg][cell].config(text=txt)
+            for cell in range(10):
+                t = self.TempsList[seg][cell]
+                txt = f"{t} °C" if t >= 0 else "-1 °C"
+                self.tab1_temps[seg][cell].config(text=txt)
 
-            time.sleep(1)
+        # Summary tree
+        self.tree.delete(*self.tree.get_children())
+        for seg in range(12):
+            row = [f"Segment {seg+1}"] + [
+                f"{self.VoltageList[seg][c]:.3f}V" if self.VoltageList[seg][c]>=0 else "-1V"
+                for c in range(12)
+            ]
+            self.tree.insert("", "end", values=row)
+
+        # reschedule
+        self.root.after(1000, self._update_gui)
 
 if __name__ == "__main__":
     root = tk.Tk()
