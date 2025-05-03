@@ -7,6 +7,7 @@ import serial
 import serial.tools.list_ports
 import queue
 
+
 class BMSApp:
     def __init__(self, root):
         self.root = root
@@ -26,9 +27,12 @@ class BMSApp:
         style.map("TButton", background=[("active", "#45A049")])
 
         style.configure("Purple.TLabelframe", background="#e6ccff", borderwidth=2, relief="groove")
-        style.configure("Purple.TLabelframe.Label", background="#e6ccff", foreground="#4b0082", font=("Arial", 14, "bold"))
-        style.configure("Purple.TLabel", background="#e6ccff", foreground="black", font=("Arial", 10), padding=3)
-        style.configure("PurpleHeader.TLabel", background="#e6ccff", foreground="#4b0082", font=("Arial", 12, "bold"), padding=3)
+        style.configure("Purple.TLabelframe.Label", background="#e6ccff", foreground="#4b0082",
+                        font=("Arial", 14, "bold"))
+        style.configure("Purple.TLabel", background="#e6ccff", foreground="black", font=("Arial", 16),
+                        padding=3)  # Increased font size
+        style.configure("PurpleHeader.TLabel", background="#e6ccff", foreground="#4b0082", font=("Arial", 16, "bold"),
+                        padding=3)  # Increased font size
         style.configure("Purple.Treeview",
                         background="#e6ccff",
                         fieldbackground="#e6ccff",
@@ -50,58 +54,73 @@ class BMSApp:
         self.root.after(1000, self._update_gui)
 
     def _create_main_layout(self):
-        self.root.columnconfigure(0, weight=7)
-        self.root.columnconfigure(1, weight=3)
-        self.root.rowconfigure(0, weight=1)
+        # Create notebook for tabs
+        notebook = ttk.Notebook(self.root)
+        notebook.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
 
-        left_frame = ttk.Frame(self.root)
+        # --- Tab 1: Temperatures and Voltages + Controls ---
+        tab1 = ttk.Frame(notebook)
+        notebook.add(tab1, text="Temperatures and Voltages")
+
+        # Left side (Temps + Volts) frame initialization
+        left_frame = ttk.Frame(tab1)
         left_frame.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
 
-        right_frame = ttk.Frame(self.root)
-        right_frame.grid(row=0, column=1, sticky="nsew", padx=10, pady=10)
-
         # --- Left side (Temps + Volts) ---
+        # Create a grid for voltages and temperatures side by side
+        left_frame.grid_rowconfigure(0, weight=3)
+        left_frame.grid_rowconfigure(1, weight=1)
+        left_frame.grid_columnconfigure(0, weight=1)
+        left_frame.grid_columnconfigure(1, weight=1)
+
+        # Temperature Frame (Left column)
         temp_frame = ttk.LabelFrame(left_frame, text="Temperatures", style="Purple.TLabelframe", padding=5)
-        temp_frame.pack(fill="both", expand=True, pady=5)
+        temp_frame.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
 
         for col in range(10):
             temp_frame.columnconfigure(col, weight=1)
 
         for col in range(10):
-            hdr = ttk.Label(temp_frame, text=f"Cell {col+1}", style="PurpleHeader.TLabel", font=("Arial", 12, "bold"))
+            hdr = ttk.Label(temp_frame, text=f"Cell {col + 1}", style="PurpleHeader.TLabel",
+                            font=("Arial", 16, "bold"))  # Increased font size
             hdr.grid(row=0, column=col, padx=1, pady=1, sticky="nsew")
 
         self.tab_temps = []
-        for row in range(12):
+        for row in range(12):  # Ensure 12 segments
             row_lbls = []
-            for col in range(10):
-                lbl = ttk.Label(temp_frame, text="-- °C", style="Purple.TLabel", font=("Arial", 10), relief="solid", borderwidth=1)
-                lbl.grid(row=row+1, column=col, padx=1, pady=1, sticky="nsew")
+            for col in range(10):  # Ensure 10 cells per segment
+                lbl = ttk.Label(temp_frame, text="-- °C", style="Purple.TLabel", font=("Arial", 14), relief="solid",
+                                borderwidth=1)  # Increased font size
+                lbl.grid(row=row + 1, column=col, padx=1, pady=1, sticky="nsew")
                 row_lbls.append(lbl)
             self.tab_temps.append(row_lbls)
 
+        # Voltage Frame (Right column)
         volt_frame = ttk.LabelFrame(left_frame, text="Voltages", style="Purple.TLabelframe", padding=5)
-        volt_frame.pack(fill="both", expand=True, pady=5)
+        volt_frame.grid(row=0, column=1, sticky="nsew", padx=5, pady=5)
 
-        for col in range(12):
+        for col in range(12):  # Ensure 12 columns for voltage cells
             volt_frame.columnconfigure(col, weight=1)
 
-        for col in range(12):
-            hdr = ttk.Label(volt_frame, text=f"Cell {col+1}", style="PurpleHeader.TLabel", font=("Arial", 12, "bold"))
+        for col in range(12):  # Ensure 12 cells per segment
+            hdr = ttk.Label(volt_frame, text=f"Cell {col + 1}", style="PurpleHeader.TLabel",
+                            font=("Arial", 16, "bold"))  # Increased font size
             hdr.grid(row=0, column=col, padx=2, pady=2, sticky="nsew")
 
         self.tab_voltages = []
-        for row in range(12):
+        for row in range(12):  # Ensure 12 segments
             row_lbls = []
-            for col in range(12):
-                lbl = ttk.Label(volt_frame, text="-- V", style="Purple.TLabel", font=("Arial", 11), relief="solid", borderwidth=1)
-                lbl.grid(row=row+1, column=col, padx=2, pady=2, sticky="nsew")
+            for col in range(12):  # Ensure 12 cells per segment
+                lbl = ttk.Label(volt_frame, text="-- V", style="Purple.TLabel", font=("Arial", 14), relief="solid",
+                                borderwidth=1)  # Increased font size
+                lbl.grid(row=row + 1, column=col, padx=2, pady=2, sticky="nsew")
                 row_lbls.append(lbl)
             self.tab_voltages.append(row_lbls)
 
-        # --- Right side (Controls + Treeview) ---
-        controls_frame = ttk.LabelFrame(right_frame, text="Controls", style="Purple.TLabelframe", padding=10)
-        controls_frame.pack(fill="x", pady=10)
+        # Controls below
+        controls_frame = ttk.LabelFrame(tab1, text="Controls", style="Purple.TLabelframe", padding=10)
+        controls_frame.grid(row=1, column=0, columnspan=2, sticky="nsew", padx=10,
+                            pady=10)  # Controls span across both columns
 
         lbl = ttk.Label(controls_frame, text="Set Charging Current (A):", font=self.label_font)
         lbl.grid(row=0, column=0, padx=5, pady=5)
@@ -122,11 +141,25 @@ class BMSApp:
         self.connect_btn = ttk.Button(controls_frame, text="Connect", command=self._connect_manual)
         self.connect_btn.grid(row=1, column=2, padx=5, pady=5)
 
-        self.status_lbl = ttk.Label(controls_frame, text="Status: Disconnected", foreground="#FF5733", font=self.label_font)
+        self.status_lbl = ttk.Label(controls_frame, text="Status: Disconnected", foreground="#FF5733",
+                                    font=self.label_font)
         self.status_lbl.grid(row=2, column=0, columnspan=3, pady=10)
 
+        # Insert DRT Logo next to controls and make it bigger
+        logo_img = tk.PhotoImage(file="DRT_Logo_Purple.png")  # ← put your logo here
+        logo_label = ttk.Label(controls_frame, image=logo_img, background="#2E3B4E", borderwidth=0)
+        logo_label.image = logo_img
+        logo_label.grid(row=3, column=3, padx=10, pady=10)  # Place logo next to controls and add padding
+
+        # --- Tab 2: Segments Summary ---
+        tab2 = ttk.Frame(notebook)
+        notebook.add(tab2, text="Segments Summary")
+
+        right_frame = ttk.Frame(tab2)
+        right_frame.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
+
         tree_frame = ttk.LabelFrame(right_frame, text="Segments Summary", style="Purple.TLabelframe", padding=10)
-        tree_frame.pack(fill="both", expand=True, pady=10)
+        tree_frame.grid(row=0, column=0, sticky="nsew", padx=5, pady=10)
 
         cols = ["Segment"] + [str(i) for i in range(1, 13)]
         self.tree = ttk.Treeview(tree_frame, columns=cols, show="headings", style="Purple.Treeview")
@@ -138,8 +171,22 @@ class BMSApp:
         tree_scroll_x = ttk.Scrollbar(tree_frame, orient="horizontal", command=self.tree.xview)
         self.tree.configure(xscrollcommand=tree_scroll_x.set)
 
-        self.tree.pack(fill="both", expand=True)
-        tree_scroll_x.pack(fill="x")
+        self.tree.grid(row=0, column=0, sticky="nsew")
+        tree_scroll_x.grid(row=1, column=0, sticky="ew")
+
+        # Configure the grid to stretch the frames as the window resizes
+        self.root.grid_rowconfigure(0, weight=1)
+        self.root.grid_columnconfigure(0, weight=1)
+
+        # Make sure the notebook and the tab's frames expand as the window is resized
+        notebook.grid_rowconfigure(0, weight=1)
+        notebook.grid_columnconfigure(0, weight=1)
+        tab1.grid_rowconfigure(0, weight=3)
+        tab1.grid_rowconfigure(1, weight=1)
+        tab1.grid_columnconfigure(0, weight=1)
+        tab1.grid_columnconfigure(1, weight=1)
+        tab2.grid_rowconfigure(0, weight=1)
+        tab2.grid_columnconfigure(0, weight=1)
 
     def _connect_manual(self):
         port = self.port_entry.get().strip()
@@ -196,7 +243,8 @@ class BMSApp:
 
         self.tree.delete(*self.tree.get_children())
         for seg in range(12):
-            row = [f"Segment {seg + 1}"] + [f"{self.VoltageList[seg][c]:.3f}V" if self.VoltageList[seg][c] >= 0 else "--V" for c in range(12)]
+            row = [f"Segment {seg + 1}"] + [
+                f"{self.VoltageList[seg][c]:.3f}V" if self.VoltageList[seg][c] >= 0 else "--V" for c in range(12)]
             self.tree.insert("", "end", values=row)
 
         self.root.after(1000, self._update_gui)
@@ -221,12 +269,6 @@ if __name__ == "__main__":
     root.title("DRT BMS Interface")
     root.state('zoomed')
     root.configure(bg="#2E3B4E")
-
-    # Insert DRT Logo
-    logo_img = tk.PhotoImage(file="DRT_Logo_Purple.png")  # ← put your logo here
-    logo_label = tk.Label(root, image=logo_img, bg="#2E3B4E", borderwidth=0)
-    logo_label.image = logo_img
-    logo_label.place(relx=1.0, rely=1.0, anchor="se", x=-20, y=-20)
 
     app = BMSApp(root)
     root.mainloop()
